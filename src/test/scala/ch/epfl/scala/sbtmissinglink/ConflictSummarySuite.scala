@@ -34,10 +34,9 @@ class ConflictSummarySuite extends munit.FunSuite {
     )
 
   private val reachable = conflict("io.netty:netty-common:4.1")
-  private val unreachable = conflict("org.slf4j:jcl-over-slf4j:2.0", label = "LATENT")
 
   test("the classic layout is sbt-missinglink's: counts, the dependencies to exclude, the note, the pointer") {
-    val lines = ConflictSummary.lines(List(reachable, conflict("io.netty:netty-common:4.1", "METHOD_SIGNATURE_NOT_FOUND")), Nil, modules, verbose = false, layout = Layout.Classic)
+    val lines = ConflictSummary.lines(List(reachable, conflict("io.netty:netty-common:4.1", "METHOD_SIGNATURE_NOT_FOUND")), modules, verbose = false, layout = Layout.Classic)
     assertEquals(lines.head, "Missinglink summary: conflicts found in 1 dependency.")
     assert(lines.contains(" * 1 conflict references classes missing from the classpath"), lines.toString)
     assert(lines.contains(" * 1 conflict references members missing from classes already on your classpath"), lines.toString)
@@ -47,55 +46,34 @@ class ConflictSummarySuite extends munit.FunSuite {
 
   test("the classic layout says what it cannot exclude: a conflict in the project's own code") {
     val own = conflict("project")
-    val lines = ConflictSummary.lines(List(own), Nil, modules, verbose = false, layout = Layout.Classic)
+    val lines = ConflictSummary.lines(List(own), modules, verbose = false, layout = Layout.Classic)
     assert(lines.contains("1 conflict originates in your own project and cannot be excluded this way."), lines.toString)
   }
 
-  test("the verbose labelled layout counts what the project can reach apart from what it cannot") {
-    val lines = ConflictSummary.lines(List(reachable), List(unreachable, unreachable), modules, verbose = true, layout = Layout.Labelled)
-    assertEquals(lines.head, "Missinglink summary: 1 conflict your code can reach, 2 more that nothing it calls reaches.")
-  }
-
-  test("the brief labelled layout says nothing of what the project cannot reach") {
-    val lines = ConflictSummary.lines(List(reachable), List(unreachable, unreachable), modules, verbose = false, layout = Layout.Labelled)
-    assertEquals(lines.head, "Missinglink summary: 1 conflict your code can reach.")
-    assert(!lines.exists(l => l.contains("moduleFilter") || l.contains("nothing it calls") || l.contains("excluding the dependencies is safe")), lines.toString)
-  }
-
-  test("only a dependency whose conflicts are all unreachable is suggested for exclusion") {
-    val lines = ConflictSummary.lines(List(reachable), List(unreachable, conflict("io.netty:netty-common:4.1", label = "PROBED")), modules, verbose = true, layout = Layout.Labelled)
-    val exclusions = lines.filter(_.contains("moduleFilter"))
-    assertEquals(exclusions.size, 1, lines.toString)
-    assert(exclusions.head.contains("jcl-over-slf4j"), "the one with a conflict the project can reach is not suggested: " + exclusions)
-    assert(exclusions.head.endsWith("// 1 latent"), exclusions.head)
-    assert(lines.exists(_.contains("excluding the dependencies is safe")), lines.toString)
-  }
-
-  test("a dependency the project can reach is listed to be fixed, with its counts, not to be excluded") {
-    val lines = ConflictSummary.lines(List(reachable), Nil, modules, verbose = false, layout = Layout.Labelled)
+  test("a dependency the project can reach is listed to be fixed, with its counts, and offered to be ignored") {
+    val lines = ConflictSummary.lines(List(reachable), modules, verbose = false, layout = Layout.Labelled)
     assert(lines.exists(_.startsWith("These can fail at run time")), lines.toString)
-    assert(lines.contains("  - io.netty:netty-common  (1 missing class, 0 missing members)"), lines.toString)
-    assert(!lines.exists(_.contains("moduleFilter")), "nothing reachable is suggested for exclusion: " + lines)
+    assert(lines.exists(l => l.contains("""moduleFilter(organization = "io.netty", name = "netty-common")""") && l.endsWith("// 1 missing class, 0 missing members")), "it is offered to be ignored: " + lines)
   }
 
   test("the verb agrees with the count, in both layouts") {
     val member = conflict("io.netty:netty-common:4.1", "METHOD_SIGNATURE_NOT_FOUND")
-    val one = ConflictSummary.lines(List(member), Nil, modules, verbose = false, layout = Layout.Labelled)
+    val one = ConflictSummary.lines(List(member), modules, verbose = false, layout = Layout.Labelled)
     assert(one.contains(" * 1 conflict references members missing from classes already on your classpath"), one.toString)
-    val two = ConflictSummary.lines(List(member, member.copy(fromClass = "b.B")), Nil, modules, verbose = false, layout = Layout.Labelled)
+    val two = ConflictSummary.lines(List(member, member.copy(fromClass = "b.B")), modules, verbose = false, layout = Layout.Labelled)
     assert(two.contains(" * 2 conflicts reference members missing from classes already on your classpath"), two.toString)
   }
 
   test("a conflict in the project's own code is shown with where it is") {
-    val lines = ConflictSummary.lines(List(conflict("project", method = "go", line = 40)), Nil, modules, verbose = false, layout = Layout.Labelled)
+    val lines = ConflictSummary.lines(List(conflict("project", method = "go", line = 40)), modules, verbose = false, layout = Layout.Labelled)
     assert(lines.contains("1 conflict originates in your own project, which no exclusion can fix:"), lines.toString)
     assert(lines.contains("  - go(java.lang.String, int, long[]):40"), lines.toString)
   }
 
   test("the verbose layout says how reachable each conflict is, in the labelled layout only") {
-    val labelled = ConflictSummary.lines(List(reachable), Nil, modules, verbose = true, layout = Layout.Labelled)
+    val labelled = ConflictSummary.lines(List(reachable), modules, verbose = true, layout = Layout.Labelled)
     assert(labelled.contains("      Reachability: reachable"), labelled.toString)
-    val classic = ConflictSummary.lines(List(reachable), Nil, modules, verbose = true, layout = Layout.Classic)
+    val classic = ConflictSummary.lines(List(reachable), modules, verbose = true, layout = Layout.Classic)
     assert(!classic.exists(_.contains("Reachability")), classic.toString)
   }
 
@@ -103,27 +81,30 @@ class ConflictSummarySuite extends munit.FunSuite {
 
   test("a version that resolution replaced is named when a conflict involves that module, in both layouts") {
     for (layout <- List(Layout.Classic, Layout.Labelled)) {
-      val lines = ConflictSummary.lines(List(reachable), Nil, modules, verbose = false, layout = layout, evictions = List(nettyEviction))
+      val lines = ConflictSummary.lines(List(reachable), modules, verbose = false, layout = layout, evictions = List(nettyEviction))
       assert(lines.exists(_.startsWith("Versions that dependency resolution replaced")), s"$layout: $lines")
       assert(lines.contains("  - io.netty:netty-common: 4.0 (wanted by a:one, b:two, c:three, ...) replaced by 4.1"), s"$layout: $lines")
     }
   }
 
-  test("a replaced version of a module no conflict involves is not mentioned") {
-    val unrelated = Eviction("org.other", "lib", "2", List(EvictedVersion("1", List("x:y"))))
-    val lines = ConflictSummary.lines(List(reachable), List(unrelated).map(_ => unreachable), modules, verbose = false, layout = Layout.Labelled, evictions = List(unrelated))
-    assert(!lines.exists(_.contains("replaced")), lines.toString)
+  test("a replaced version is named when a module the conflicts involve is one that asked for it") {
+    val eviction = Eviction("com.google.guava", "guava", "31.1", List(EvictedVersion("16.0.1", List("io.netty:netty-common"))))
+    for (layout <- List(Layout.Classic, Layout.Labelled)) {
+      val lines = ConflictSummary.lines(List(reachable), modules, verbose = false, layout = layout, evictions = List(eviction))
+      assert(lines.contains("  - com.google.guava:guava: 16.0.1 (wanted by io.netty:netty-common) replaced by 31.1"), s"$layout: $lines")
+    }
   }
 
-  test("a module that holds only unreachable conflicts is not mentioned") {
-    val lines = ConflictSummary.lines(List(reachable), List(unreachable), modules, verbose = false, layout = Layout.Labelled, evictions = List(Eviction("org.slf4j", "jcl-over-slf4j", "2.0", List(EvictedVersion("1.7", List("a:one"))))))
-    assert(!lines.exists(_.contains("jcl-over-slf4j: 1.7")), lines.toString)
+  test("a replaced version of a module no conflict involves is not mentioned") {
+    val unrelated = Eviction("org.other", "lib", "2", List(EvictedVersion("1", List("x:y"))))
+    val lines = ConflictSummary.lines(List(reachable), modules, verbose = false, layout = Layout.Labelled, evictions = List(unrelated))
+    assert(!lines.exists(_.contains("replaced")), lines.toString)
   }
 
   test("the verbose breakdown lists artifacts and classes in sorted order") {
     val artifacts = List("f:art", "e:art", "d:art", "c:art", "b:art", "a:art")
     val conflicts = artifacts.map(a => conflict(a).copy(fromClass = s"x.${a.take(1)}"))
-    val lines = ConflictSummary.lines(conflicts, Nil, modules, verbose = true, layout = Layout.Classic)
+    val lines = ConflictSummary.lines(conflicts, modules, verbose = true, layout = Layout.Classic)
     assertEquals(lines.filter(_.startsWith("  In artifact: ")).map(_.stripPrefix("  In artifact: ")), artifacts.sorted)
     assertEquals(lines.filter(_.startsWith("    In class: ")).map(_.stripPrefix("    In class: ")), artifacts.sorted.map(a => s"x.${a.take(1)}"))
   }
@@ -134,7 +115,7 @@ class ConflictSummarySuite extends munit.FunSuite {
     val other = conflict("io.netty:netty-common:4.1", category = "ABSTRACT_METHOD_NOT_IMPLEMENTED")
     assertEquals(other.category, Category.Other("ABSTRACT_METHOD_NOT_IMPLEMENTED"))
     assert(!other.isMissingClass && !other.isMissingMember)
-    val lines = ConflictSummary.lines(List(other), Nil, modules, verbose = false, layout = Layout.Classic)
+    val lines = ConflictSummary.lines(List(other), modules, verbose = false, layout = Layout.Classic)
     assert(lines.exists(_.contains("ABSTRACT METHOD NOT IMPLEMENTED")), lines.toString)
   }
 

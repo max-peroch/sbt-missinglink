@@ -129,19 +129,17 @@ private[sbtmissinglink] object ConflictSummary {
     }
 
   /**
-   * The report: `shown` are the conflicts that fail the build, `others` the ones the project cannot reach (empty at class precision, where every
-   * conflict counts), `modules` the dependencies the entries came from.
+   * The report: `shown` are the conflicts that fail the build, `modules` the dependencies the entries came from.
    */
   def lines(
       shown: List[EngineConflict],
-      others: List[EngineConflict],
       modules: Map[String, ModuleID],
       verbose: Boolean,
       layout: Layout,
       evictions: List[Eviction] = Nil
   ): List[String] =
     layout match {
-      case Layout.Labelled => labelledLines(shown, others, modules, verbose, evictions)
+      case Layout.Labelled => labelledLines(shown, modules, verbose, evictions)
       case Layout.Classic  => classicLines(shown, modules, verbose, evictions)
     }
 
@@ -150,7 +148,10 @@ private[sbtmissinglink] object ConflictSummary {
   /** Dependency resolution may be what broke them: a version a dependency was built against was replaced by another. Only modules the failing conflicts involve. */
   private def evictionNote(conflicts: List[EngineConflict], modules: Map[String, ModuleID], evictions: List[Eviction]): List[String] = {
     val involved = conflicts.flatMap(c => List(c.usedBy, c.existsIn).flatMap(modules.get)).map(moduleKey).toSet
-    val relevant = evictions.filter(e => involved.contains((e.organization, e.name))).sortBy(e => (e.organization, e.name))
+    val involvedNames = involved.map { case (org, name) => s"$org:$name" }
+    // A replaced module matters if a conflict is in it, or in a module that asked for the version that was replaced.
+    def relevantTo(e: Eviction): Boolean = involved.contains((e.organization, e.name)) || e.evicted.exists(_.requestedBy.exists(involvedNames.contains))
+    val relevant = evictions.filter(relevantTo).sortBy(e => (e.organization, e.name))
     if (relevant.isEmpty) Nil
     else
       "Versions that dependency resolution replaced, which may be what broke these (see `show <proj>/evicted`):" +:
@@ -209,17 +210,15 @@ private[sbtmissinglink] object ConflictSummary {
 
   private def labelledLines(
       shown: List[EngineConflict],
-      others: List[EngineConflict],
       modules: Map[String, ModuleID],
       verbose: Boolean,
       evictions: List[Eviction]
   ): List[String] = {
     val header =
-      s"Missinglink summary: ${shown.size} ${noun(shown.size)} your code can reach" +
-        (if (verbose && others.nonEmpty) s", ${others.size} more that nothing it calls reaches." else ".")
+      s"Missinglink summary: ${shown.size} ${noun(shown.size)} your code can reach."
 
     val detail = if (verbose) verboseLines(shown, Layout.Labelled) else if (shown.nonEmpty) reachableSection(shown, modules) else Nil
-    List(header) ++ detail ++ (if (verbose) unreachableSection(shown, others, modules) else Nil) ++ evictionNote(shown, modules, evictions) ++ (if (verbose) Nil else List(verbosePointer))
+    List(header) ++ detail ++ evictionNote(shown, modules, evictions) ++ (if (verbose) Nil else List(verbosePointer))
   }
 
   /** What the project can hit: what is broken, in which dependencies, and what to do about it. */
@@ -229,8 +228,8 @@ private[sbtmissinglink] object ConflictSummary {
     kindLines(shown) ++
       (if (perModule.isEmpty) Nil
        else
-         "These can fail at run time: align the versions of the dependencies below (see `show <proj>/evicted`), or fix the code that calls into them." +:
-           perModule.map { case ((org, name), counts) => s"  - $org:$name  (${classCount(counts.classes)}, ${memberCount(counts.members)}${if (counts.others > 0) s", ${counts.others} other" else ""})" }) ++
+         "These can fail at run time: align the versions of the dependencies below (see `show <proj>/evicted`), fix the code that calls into them, or ignore them:" +:
+           exclusionSnippet(perModule, (_, counts) => classicComment(counts) + (if (counts.others > 0) s", ${counts.others} other" else ""))) ++
       projectLocalSites(shown, modules)
   }
 
@@ -244,24 +243,5 @@ private[sbtmissinglink] object ConflictSummary {
       val more = if (sites.size > 5) List(s"  ... and ${sites.size - 5} more places") else Nil
       List(s"${local.size} ${noun(local.size)} $verb in your own project, which no exclusion can fix:") ++ sites.take(5).map("  - " + _) ++ more
     }
-  }
-
-  /** What the project cannot reach: dependencies whose conflicts are all unreachable are safe to exclude. */
-  private def unreachableSection(shown: List[EngineConflict], others: List[EngineConflict], modules: Map[String, ModuleID]): List[String] = {
-    val withReachable = shown.flatMap(c => modules.get(c.usedBy).map(moduleKey)).toSet
-    val safe = byModule(others, modules).filterNot { case (key, _) => withReachable.contains(key) }
-    val labelsOf: Map[(String, String), Map[String, Int]] =
-      others
-        .flatMap(c => modules.get(c.usedBy).map(m => moduleKey(m) -> c.label))
-        .groupBy(_._1)
-        .map { case (key, grouped) => key -> grouped.map(_._2).groupBy(identity).map { case (label, ls) => label -> ls.size } }
-
-    def comment(key: (String, String)): String =
-      labelsOf.getOrElse(key, Map.empty).toList.sortBy { case (label, n) => (-n, label) }.map { case (label, n) => s"$n ${label.toLowerCase}" }.mkString(", ")
-
-    if (safe.isEmpty) Nil
-    else
-      "Nothing your code calls reaches these (never called, caught, or checked for first), so excluding the dependencies is safe:" +:
-        exclusionSnippet(safe, (key, _) => comment(key))
   }
 }

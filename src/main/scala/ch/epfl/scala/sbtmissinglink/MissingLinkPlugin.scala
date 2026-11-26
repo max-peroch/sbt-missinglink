@@ -208,19 +208,18 @@ object MissingLinkPlugin extends AutoPlugin {
 
   /**
    * Prints what the check found and fails the build if it must. At class precision the report is sbt-missinglink's own: every conflict, and only the
-   * three kinds it knows. At method precision the call graph says which conflicts the project can reach, and the others are reported apart.
+   * three kinds it knows. At method precision the call graph says which conflicts the project can reach, and the others are left out.
    */
   private def reportConflicts(result: EngineResult, settings: ReportSettings, modules: Map[String, ModuleID], evictionData: List[Eviction], log: Logger): Unit = {
     val layout = if (settings.precision == MissinglinkPrecision.Class) ConflictSummary.Layout.Classic else ConflictSummary.Layout.Labelled
     val considered = if (layout == ConflictSummary.Layout.Classic) result.conflicts.filter(_.reportedByMissinglink) else result.conflicts
-    val (shown, others) = considered.partition(fails(_, settings.scanDependencies))
-    if (shown.nonEmpty) reportFailing(shown, others, result, settings, layout, modules, evictionData, log)
-    else reportPassing(others, layout, settings.verbose, log)
+    val shown = considered.filter(fails(_, settings.scanDependencies))
+    if (shown.nonEmpty) reportFailing(shown, result, settings, layout, modules, evictionData, log)
+    else log.info("No conflicts found")
   }
 
   private def reportFailing(
       shown: List[EngineConflict],
-      others: List[EngineConflict],
       result: EngineResult,
       settings: ReportSettings,
       layout: ConflictSummary.Layout,
@@ -241,28 +240,14 @@ object MissingLinkPlugin extends AutoPlugin {
     val total = s"$filteredTotal $conflictNoun found!$diffMessage"
     log.error(total)
 
-    val unreachable = if (layout == ConflictSummary.Layout.Classic) Nil else others
-    ConflictSummary.lines(shown, unreachable, modules, settings.verbose, layout, evictionData).foreach(line => log.error(line))
+    ConflictSummary.lines(shown, modules, settings.verbose, layout, evictionData).foreach(line => log.error(line))
     // The verbose breakdown can run long: the total and what kinds it is are said again where the output ends.
     if (settings.verbose) {
       log.error(total)
       ConflictSummary.kindLines(shown).foreach(line => log.error(line))
     }
 
-    if (settings.failOnConflicts) {
-      val verb = if (filteredTotal == 1) "was" else "were"
-      throw new MessageOnlyException(s"There $verb $filteredTotal $conflictNoun")
-    }
-  }
-
-  private def reportPassing(others: List[EngineConflict], layout: ConflictSummary.Layout, verbose: Boolean, log: Logger): Unit = {
-    log.info("No conflicts found")
-    if (verbose && layout == ConflictSummary.Layout.Labelled && others.nonEmpty) {
-      log.info(
-        s"${others.size} ${if (others.size == 1) "conflict is" else "conflicts are"} not reachable from your code " +
-          "(never called, caught, or checked for first) and do not fail the build."
-      )
-    }
+    if (settings.failOnConflicts) throw new MessageOnlyException("Conflicts found")
   }
 
   /** Does `conflict` fail the build? The checker says which conflicts the project can reach (`failing`); scanning the dependencies counts every one. */
