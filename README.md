@@ -12,6 +12,10 @@ Add the following line in `project/plugins.sbt`:
 addSbtPlugin("ch.epfl.scala" % "sbt-missinglink" % "<sbt-missinglink-version>")
 ```
 
+| `sbt-missinglink` |
+| :---: |
+| [![sbt-missinglink badge](https://maven-badges.sml.io/sonatype-central/ch.epfl.scala/sbt-missinglink/badge.svg)](https://central.sonatype.com/artifact/ch.epfl.scala/sbt-missinglink) |
+
 The checker, reachable-linkage, comes with the plugin; nothing else needs to be on the build classpath.
 
 Then, run the following task for the project you want to test:
