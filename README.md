@@ -6,7 +6,7 @@ It supports sbt 1 and sbt 2.
 
 ## Usage
 
-Add this line in `project/plugins.sbt`:
+Add the following line in `project/plugins.sbt`:
 
 ```scala
 addSbtPlugin("ch.epfl.scala" % "sbt-missinglink" % "<sbt-missinglink-version>")
@@ -14,7 +14,7 @@ addSbtPlugin("ch.epfl.scala" % "sbt-missinglink" % "<sbt-missinglink-version>")
 
 The checker, reachable-linkage, comes with the plugin; nothing else needs to be on the build classpath.
 
-Then run the following task for the project you want to test:
+Then, run the following task for the project you want to test:
 
 ```
 > theProject/missinglinkCheck
@@ -24,6 +24,9 @@ It starts from the classes of your project (its `Compile` configuration, in `src
 are reported apart and do not fail it.
 
 ### Testing another configuration
+
+You can test another configuration, such as `Test` or `Runtime`, with:
+
 
 ```
 > theProject/Runtime/missinglinkCheck
@@ -47,7 +50,8 @@ Starts from every class on the classpath instead of your project's, and fails on
 
 ### Do not fail on conflicts
 
-By default, the plugin fails the build if any conflicts fail it. It can be disabled by the `missinglinkFailOnConflicts` setting:
+By default, the plugin fails the build if any conflicts are found.
+It can be disabled by the `missinglinkFailOnConflicts` setting:
 
 ```
 missinglinkFailOnConflicts := false
@@ -113,10 +117,10 @@ The checker summarises each jar once and reuses the summary on later runs, under
 
 ### Limiting the concurrency
 
-sbt runs the analysis on the modules you have concurrently.
+sbt runs the missing-link analysis on the modules you have concurrently.
 Analysis of each module can take up a considerable amount of memory,
 so you might want to limit the degree of concurrency.
-To run it at most on 4 projects at a time, add this setting to your project `root`.
+To run missing-link at most on 4 projects at a time, add this setting to your project `root`.
 
 ```scala
 concurrentRestrictions += Tags.limit(missinglinkConflictsTag, 4)
@@ -125,7 +129,7 @@ concurrentRestrictions += Tags.limit(missinglinkConflictsTag, 4)
 ## More information
 
 You can find more information about the problem statement, caveats and
-limitations in the upstream project
+limitations, etc. in the upstream project
 [missinglink](https://github.com/spotify/missinglink).
 
 ## Acknowledgments
