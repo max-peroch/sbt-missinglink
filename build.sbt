@@ -40,7 +40,6 @@ lazy val `sbt-missinglink` = project
       }
     },
     addSbtPlugin("com.github.sbt" % "sbt2-compat" % "0.1.0"),
-    // The checker: `reachable-linkage-core_2.12` on sbt 1, `reachable-linkage-core_3` on sbt 2.
     libraryDependencies += "io.github.max-peroch" %% "reachable-linkage-core" % "0.2.0",
     libraryDependencies += "org.scalameta" %% "munit" % "1.0.4" % Test,
     scriptedLaunchOpts := {
