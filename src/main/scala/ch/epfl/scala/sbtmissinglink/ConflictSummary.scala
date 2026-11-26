@@ -147,7 +147,7 @@ private[sbtmissinglink] object ConflictSummary {
 
   private val RequestersShown = 3
 
-  /** Dependency resolution may be what broke them: a version a dependency was built against was replaced by another. Only modules the conflicts involve. */
+  /** Dependency resolution may be what broke them: a version a dependency was built against was replaced by another. Only modules the failing conflicts involve. */
   private def evictionNote(conflicts: List[EngineConflict], modules: Map[String, ModuleID], evictions: List[Eviction]): List[String] = {
     val involved = conflicts.flatMap(c => List(c.usedBy, c.existsIn).flatMap(modules.get)).map(moduleKey).toSet
     val relevant = evictions.filter(e => involved.contains((e.organization, e.name))).sortBy(e => (e.organization, e.name))
@@ -219,7 +219,7 @@ private[sbtmissinglink] object ConflictSummary {
         (if (others.nonEmpty) s", ${others.size} more that nothing it calls reaches." else ".")
 
     val detail = if (verbose) verboseLines(shown, Layout.Labelled) else if (shown.nonEmpty) reachableSection(shown, modules) else Nil
-    List(header) ++ detail ++ unreachableSection(shown, others, modules) ++ (if (verbose) evictionNote(shown ++ others, modules, evictions) else List(verbosePointer))
+    List(header) ++ detail ++ unreachableSection(shown, others, modules) ++ (if (verbose) evictionNote(shown, modules, evictions) else List(verbosePointer))
   }
 
   /** What the project can hit: what is broken, in which dependencies, and what to do about it. */

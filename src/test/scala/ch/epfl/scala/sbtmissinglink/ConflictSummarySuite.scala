@@ -116,9 +116,9 @@ class ConflictSummarySuite extends munit.FunSuite {
     assert(!lines.exists(_.contains("replaced")), lines.toString)
   }
 
-  test("a module that holds only unreachable conflicts still gets the note") {
+  test("a module that holds only unreachable conflicts is not mentioned") {
     val lines = ConflictSummary.lines(List(reachable), List(unreachable), modules, verbose = true, layout = Layout.Labelled, evictions = List(Eviction("org.slf4j", "jcl-over-slf4j", "2.0", List(EvictedVersion("1.7", List("a:one"))))))
-    assert(lines.contains("  - org.slf4j:jcl-over-slf4j: 1.7 (wanted by a:one) replaced by 2.0"), lines.toString)
+    assert(!lines.exists(_.contains("jcl-over-slf4j: 1.7")), lines.toString)
   }
 
   test("the verbose breakdown lists artifacts and classes in sorted order") {
