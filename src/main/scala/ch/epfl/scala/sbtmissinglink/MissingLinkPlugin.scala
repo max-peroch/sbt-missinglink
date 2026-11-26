@@ -116,11 +116,17 @@ object MissingLinkPlugin extends AutoPlugin {
   // Make it easy to throttle the concurrency of running missing-link on multiple projects, it consumes a lot of memory
   val missinglinkConflictsTag = Tags.Tag("missinglinkConflicts")
 
+  // sbt's `evicted` prints what it finds whenever it runs, and the report names replaced versions only in the verbose output: so it runs only then.
+  private val missinglinkEvictions = taskKey[List[Eviction]]("What dependency resolution replaced, for the verbose report.")
+
   val configSettings: Seq[Setting[?]] = Def.settings(
+    missinglinkEvictions := Def.taskDyn {
+      if (missinglinkVerbose.value) Def.task(evictions(evicted.value)) else Def.task(List.empty[Eviction])
+    }.value,
     missinglinkCheck := Def
       .task {
         val log = streams.value.log
-        val evictionData = evictions(evicted.value)
+        val evictionData = missinglinkEvictions.value
 
         implicit val converter: FileConverter = fileConverter.value
         val cp = fullClasspath.value
