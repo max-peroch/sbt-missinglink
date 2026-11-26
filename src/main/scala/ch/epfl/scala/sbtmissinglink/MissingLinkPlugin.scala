@@ -116,8 +116,6 @@ object MissingLinkPlugin extends AutoPlugin {
   // Make it easy to throttle the concurrency of running missing-link on multiple projects, it consumes a lot of memory
   val missinglinkConflictsTag = Tags.Tag("missinglinkConflicts")
 
-
-
   val configSettings: Seq[Setting[?]] = Def.settings(
     missinglinkCheck := Def
       .task {
@@ -232,10 +230,16 @@ object MissingLinkPlugin extends AutoPlugin {
         ""
 
     val conflictNoun = if (filteredTotal == 1) "conflict" else "conflicts"
-    log.info(s"$filteredTotal $conflictNoun found!$diffMessage")
+    val total = s"$filteredTotal $conflictNoun found!$diffMessage"
+    log.info(total)
 
     val unreachable = if (layout == ConflictSummary.Layout.Classic) Nil else others
     ConflictSummary.lines(shown, unreachable, modules, settings.verbose, layout, evictionData).foreach(line => log.error(line))
+    // The verbose breakdown can run long: the total and what kinds it is are said again where the output ends.
+    if (settings.verbose) {
+      log.info(total)
+      ConflictSummary.kindLines(shown).foreach(line => log.error(line))
+    }
 
     if (settings.failOnConflicts) {
       val verb = if (filteredTotal == 1) "was" else "were"
@@ -267,8 +271,6 @@ object MissingLinkPlugin extends AutoPlugin {
     missinglinkVerbose := false,
     missinglinkKeepRulesFile := None,
   )
-
-
 
   override def projectSettings: Seq[Setting[?]] = {
     // Scanning the dependencies implies class precision, so a build that sets only that keeps sbt-missinglink's behaviour.
