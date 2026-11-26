@@ -1,0 +1,16 @@
+> compile
+> Compile/missinglinkCheck
+
+# A rules file is read, and one that cannot be read is an error, not something ignored.
+> set missinglinkKeepRulesFile := Some(baseDirectory.value / "good-rules.txt")
+> Compile/missinglinkCheck
+> set missinglinkKeepRulesFile := Some(baseDirectory.value / "bad-rules.txt")
+-> Compile/missinglinkCheck
+> set missinglinkKeepRulesFile := None
+
+# Where the checker keeps what it learns about jars is a choice too, and none means nothing is written.
+> set missinglinkCacheDirectory := None
+> Compile/missinglinkCheck
+> set missinglinkCacheDirectory := Some(baseDirectory.value / "elsewhere")
+> Compile/missinglinkCheck
+$ exists elsewhere

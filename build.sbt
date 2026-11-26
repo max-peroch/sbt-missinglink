@@ -22,7 +22,7 @@ lazy val `sbt-missinglink` = project
   .in(file("."))
   .enablePlugins(SbtPlugin)
   .settings(
-    crossScalaVersions += "3.8.4",
+    crossScalaVersions += "3.9.0",
     scalacOptions ++= {
       scalaBinaryVersion.value match {
         case "2.12" =>
@@ -36,12 +36,13 @@ lazy val `sbt-missinglink` = project
         case "2.12" =>
           (pluginCrossBuild / sbtVersion).value
         case _ =>
-          "2.0.1"
+          "2.1.1"
       }
     },
     addSbtPlugin("com.github.sbt" % "sbt2-compat" % "0.1.0"),
-    // No library dependency on the checker: the plugin fetches it at run time with Coursier, into a classloader of its own (see MissingLinkPlugin).
-    libraryDependencies += "io.get-coursier" % "interface" % "1.0.28",
+    // The checker: `reachable-linkage-core_2.12` on sbt 1, `reachable-linkage-core_3` on sbt 2.
+    libraryDependencies += "io.github.max-peroch" %% "reachable-linkage-core" % "0.2.0",
+    libraryDependencies += "org.scalameta" %% "munit" % "1.0.4" % Test,
     scriptedLaunchOpts := {
       scriptedLaunchOpts.value ++
         Seq("-Xmx1024M", "-Dplugin.version=" + version.value)

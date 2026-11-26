@@ -1,0 +1,32 @@
+> compile
+
+# The broken method is in a class the project uses but nothing it calls reaches it: by default (method precision) the build passes.
+> Compile/missinglinkCheck
+> missinglinkCheck
+
+# Scanning the dependencies counts every conflict on the classpath, including ones nothing calls.
+> set missinglinkScanDependencies := true
+> set missinglinkPrecision := MissinglinkPrecision.Method
+-> Compile/missinglinkCheck
+> set missinglinkScanDependencies := false
+
+# At class precision every conflict counts, as in sbt-missinglink.
+> set missinglinkPrecision := MissinglinkPrecision.Class
+-> Compile/missinglinkCheck
+
+# Scanning the dependencies at class precision is the old sbt-missinglink behaviour.
+> set missinglinkScanDependencies := true
+-> Compile/missinglinkCheck
+> set missinglinkPrecision := MissinglinkPrecision.Method
+> set missinglinkScanDependencies := false
+
+# Not failing the build is still a choice of its own.
+> set missinglinkFailOnConflicts := false
+> set missinglinkScanDependencies := true
+> Compile/missinglinkCheck
+> set missinglinkFailOnConflicts := true
+
+# Scanning the dependencies alone implies class precision. (The settings above were chosen explicitly; a reload forgets them.)
+> reload
+> set missinglinkScanDependencies := true
+-> Compile/missinglinkCheck

@@ -1,0 +1,2 @@
+# what a container calls by reflection
+keep-members test.Wired
