@@ -163,6 +163,18 @@ private[sbtmissinglink] object ConflictSummary {
         }
   }
 
+  /** How many of the conflicts are a missing class, a missing member, or another kind of link: the recap that closes the output. */
+  def kindLines(conflicts: List[EngineConflict]): List[String] = {
+    val classes = conflicts.count(_.isMissingClass)
+    val members = conflicts.count(_.isMissingMember)
+    val others = conflicts.filterNot(c => c.isMissingClass || c.isMissingMember)
+    List(
+      if (classes > 0) Some(s" * $classes ${noun(classes)} ${referenceVerb(classes)} classes missing from the classpath") else None,
+      if (members > 0) Some(s" * $members ${noun(members)} ${referenceVerb(members)} members missing from classes already on your classpath") else None,
+      if (others.nonEmpty) Some(s" * ${others.size} ${noun(others.size)} of other kinds " + others.map(c => categoryDesc(c.category)).distinct.sorted.mkString("(", ", ", ")")) else None
+    ).flatten
+  }
+
   // ---- sbt-missinglink's own layout ----
 
   private def classicLines(conflicts: List[EngineConflict], modules: Map[String, ModuleID], verbose: Boolean, evictions: List[Eviction]): List[String] = {
@@ -177,27 +189,11 @@ private[sbtmissinglink] object ConflictSummary {
   }
 
   private def classicBrief(conflicts: List[EngineConflict], perModule: List[((String, String), Counts)], modules: Map[String, ModuleID], evictions: List[Eviction]): List[String] = {
-    val classNotFound = conflicts.filter(_.isMissingClass)
-    val memberNotFound = conflicts.filter(_.isMissingMember)
-    val other = conflicts.filterNot(c => c.isMissingClass || c.isMissingMember)
-
-    val kinds = List(
-      if (classNotFound.nonEmpty)
-        Some(s" * ${classNotFound.size} ${noun(classNotFound.size)} ${referenceVerb(classNotFound.size)} classes missing from the classpath")
-      else None,
-      if (memberNotFound.nonEmpty)
-        Some(s" * ${memberNotFound.size} ${noun(memberNotFound.size)} ${referenceVerb(memberNotFound.size)} members missing from classes already on your classpath")
-      else None,
-      if (other.nonEmpty)
-        Some(s" * ${other.size} ${noun(other.size)} of other kinds " + other.map(c => categoryDesc(c.category)).distinct.sorted.mkString("(", ", ", ")"))
-      else None
-    ).flatten
-
     val exclusions =
       if (perModule.isEmpty) Nil
       else "Exclude the dependencies that reference them:" +: exclusionSnippet(perModule, (_, counts) => classicComment(counts))
 
-    kinds ++ exclusions ++ projectLocalNote(conflicts, modules) ++ evictionNote(conflicts, modules, evictions) :+ verbosePointer
+    kindLines(conflicts) ++ exclusions ++ projectLocalNote(conflicts, modules) ++ evictionNote(conflicts, modules, evictions) :+ verbosePointer
   }
 
   private def projectLocalNote(conflicts: List[EngineConflict], modules: Map[String, ModuleID]): List[String] = {
@@ -228,16 +224,9 @@ private[sbtmissinglink] object ConflictSummary {
 
   /** What the project can hit: what is broken, in which dependencies, and what to do about it. */
   private def reachableSection(shown: List[EngineConflict], modules: Map[String, ModuleID]): List[String] = {
-    val classes = shown.count(_.isMissingClass)
-    val members = shown.count(_.isMissingMember)
-    val other = shown.size - classes - members
     val perModule = byModule(shown, modules)
 
-    List(
-      if (classes > 0) Some(s" * ${classes} ${noun(classes)} ${referenceVerb(classes)} classes missing from the classpath") else None,
-      if (members > 0) Some(s" * ${members} ${noun(members)} ${referenceVerb(members)} members missing from classes already on your classpath") else None,
-      if (other > 0) Some(s" * ${other} ${noun(other)} of other kinds " + shown.filterNot(c => c.isMissingClass || c.isMissingMember).map(c => categoryDesc(c.category)).distinct.sorted.mkString("(", ", ", ")")) else None
-    ).flatten ++
+    kindLines(shown) ++
       (if (perModule.isEmpty) Nil
        else
          "These can fail at run time: align the versions of the dependencies below (see `show <proj>/evicted`), or fix the code that calls into them." +:
