@@ -40,10 +40,8 @@ lazy val `sbt-missinglink` = project
       }
     },
     addSbtPlugin("com.github.sbt" % "sbt2-compat" % "0.1.0"),
-    libraryDependencies ++= Seq(
-      "com.spotify" % "missinglink-core" % "0.2.11",
-      "org.ow2.asm" % "asm-tree" % "9.9.1"
-    ),
+    // No library dependency on the checker: the plugin fetches it at run time with Coursier, into a classloader of its own (see MissingLinkPlugin).
+    libraryDependencies += "io.get-coursier" % "interface" % "1.0.28",
     scriptedLaunchOpts := {
       scriptedLaunchOpts.value ++
         Seq("-Xmx1024M", "-Dplugin.version=" + version.value)

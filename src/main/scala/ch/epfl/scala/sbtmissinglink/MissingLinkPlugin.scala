@@ -7,21 +7,12 @@ import sbt.plugins.JvmPlugin
 
 import sbtcompat.PluginCompat
 
-import java.io.FileInputStream
+import java.net.URLClassLoader
+import java.util.{Arrays, Collections, HashMap => JHashMap, List => JList, Map => JMap}
 
 import scala.collection.JavaConverters._
 import scala.collection.immutable.Map
 
-import com.spotify.missinglink.{ArtifactLoader, Conflict, ConflictChecker, Java9ModuleLoader}
-import com.spotify.missinglink.Conflict.ConflictCategory
-import com.spotify.missinglink.datamodel.{
-  Artifact,
-  ArtifactBuilder,
-  ArtifactName,
-  ClassTypeDescriptor,
-  DeclaredClass,
-  Dependency
-}
 import xsbti.FileConverter
 
 object MissingLinkPlugin extends AutoPlugin {
@@ -101,6 +92,7 @@ object MissingLinkPlugin extends AutoPlugin {
   // Make it easy to throttle the concurrency of running missing-link on multiple projects, it consumes a lot of memory
   val missinglinkConflictsTag = Tags.Tag("missinglinkConflicts")
 
+
   val configSettings: Seq[Setting[?]] = Def.settings(
     missinglinkCheck := Def
       .task {
@@ -109,6 +101,7 @@ object MissingLinkPlugin extends AutoPlugin {
         implicit val converter: FileConverter = fileConverter.value
         val cp = fullClasspath.value
         val classDir = (Compile / classDirectory).value
+        val engineJars = resolveEngine(log)
         val failOnConflicts = missinglinkFailOnConflicts.value
         val scanDependencies = missinglinkScanDependencies.value
         val verbose = missinglinkVerbose.value
@@ -122,54 +115,54 @@ object MissingLinkPlugin extends AutoPlugin {
           "ignoreDestinationPackages and targetDestinationPackages cannot be defined in the same project."
         )
 
-        val filter =
+        val includedModules =
           missinglinkExcludedDependencies.value.foldLeft[ModuleFilter](_ => true)((k, v) => k - v)
 
-        val (conflicts, sourceModules) =
-          loadArtifactsAndCheckConflicts(cp, classDir, scanDependencies, filter, log)
+        val entries = classpathEntries(cp, classDir)
+        val modules: Map[String, ModuleID] = entries.collect { case SbtEntry(name, _, Some(m)) => name -> m }.toMap
+        val excluded = entries.collect { case e if e.module.exists(m => !includedModules(m)) => e.name }.toSet
 
-        val conflictFilters = filterConflicts(
-          missinglinkIgnoreSourcePackages.value,
-          missinglinkIgnoreSourcePackages,
-          log,
-          "source",
-          _.fromClass,
-        ) andThen filterConflicts(
-          missinglinkTargetSourcePackages.value,
-          missinglinkTargetSourcePackages,
-          log,
-          "source",
-          _.fromClass,
-        ) andThen filterConflicts(
-          missinglinkIgnoreDestinationPackages.value,
-          missinglinkIgnoreDestinationPackages,
-          log,
-          "destination",
-          _.targetClass,
-        ) andThen filterConflicts(
-          missinglinkTargetDestinationPackages.value,
-          missinglinkTargetDestinationPackages,
-          log,
-          "destination",
-          _.targetClass,
+        if (!hasClasses(classDir)) {
+          log.warn(
+            "No classes found in project build directory" +
+              " - did you run 'sbt compile' first?"
+          )
+        }
+
+        val request = engineRequest(
+          classDir,
+          entries,
+          excluded,
+          scanDependencies,
+          missinglinkIgnoreSourcePackages.value.map(p => (p.name, p.ignoreSubpackages)),
+          missinglinkTargetSourcePackages.value.map(p => (p.name, p.targetSubpackages)),
+          missinglinkIgnoreDestinationPackages.value.map(p => (p.name, p.ignoreSubpackages)),
+          missinglinkTargetDestinationPackages.value.map(p => (p.name, p.targetSubpackages))
         )
+        val result = EngineBridge.check(engineJars, request)
+        result.warnings.foreach(w => log.warn(w))
+        logFilterEffects(result, log)
 
-        val filteredConflicts = conflictFilters(conflicts)
+        // Scanning the dependencies keeps sbt-missinglink's own view: the three kinds of conflict it reports. Otherwise
+        // the build is about what the project can reach.
+        val conflicts: Seq[EngineConflict] =
+          if (scanDependencies) result.conflicts.filter(_.reportedByMissinglink)
+          else result.conflicts.filter(_.failing)
 
-        if (filteredConflicts.nonEmpty) {
-          val initialTotal = conflicts.length
-          val filteredTotal = filteredConflicts.length
+        if (conflicts.nonEmpty) {
+          val filteredTotal = conflicts.length
+          val removedByFilters = result.filtered.map(_._2).sum
 
           val diffMessage =
-            if (initialTotal != filteredTotal)
-              s" ($initialTotal conflicts were found before applying filters)"
+            if (removedByFilters != 0)
+              s" (${filteredTotal + removedByFilters} conflicts were found before applying filters)"
             else
               ""
 
           val conflictNoun = if (filteredTotal == 1) "conflict" else "conflicts"
           log.info(s"$filteredTotal $conflictNoun found!$diffMessage")
 
-          outputConflicts(filteredConflicts, sourceModules, verbose, log)
+          outputConflicts(conflicts, modules, verbose, log)
 
           if (failOnConflicts) {
             val verb = if (filteredTotal == 1) "was" else "were"
@@ -177,6 +170,14 @@ object MissingLinkPlugin extends AutoPlugin {
           }
         } else {
           log.info("No conflicts found")
+        }
+
+        val notReachable = result.conflicts.size - conflicts.size
+        if (!scanDependencies && notReachable > 0) {
+          log.info(
+            s"$notReachable more ${if (notReachable == 1) "conflict is" else "conflicts are"} not reachable from your code " +
+              "(never called, guarded by a catch, or probed for first) and do not fail the build."
+          )
         }
       }
       .tag(missinglinkConflictsTag)
@@ -194,184 +195,158 @@ object MissingLinkPlugin extends AutoPlugin {
     missinglinkVerbose := false,
   )
 
+
   override def projectSettings: Seq[Setting[?]] = {
     inConfig(Compile)(configSettings) ++
       inConfig(Runtime)(configSettings) ++
       inConfig(Test)(configSettings)
   }
 
-  private def loadArtifactsAndCheckConflicts(
-      cp: Classpath,
-      classDirectory: File,
-      scanDependencies: Boolean,
-      excluded: ModuleFilter,
-      log: Logger
-  )(implicit
-      converter: FileConverter
-  ): (Seq[Conflict], Map[ClassTypeDescriptor, ModuleID]) = {
+  private val engineVersion = "0.1.0-SNAPSHOT"
 
-    val runtimeProjectArtifacts = constructArtifacts(cp, log)
-
-    // Map each class to the module that provides it (first wins), to attribute conflicts to a JAR.
-    val sourceModules: Map[ClassTypeDescriptor, ModuleID] =
-      runtimeProjectArtifacts.foldLeft(Map.empty[ClassTypeDescriptor, ModuleID]) { (acc, ma) =>
-        ma.module match {
-          case Some(module) =>
-            ma.artifact.classes().keySet().asScala.foldLeft(acc) { (current, className) =>
-              if (current.contains(className)) current else current + (className -> module)
-            }
-          case None => acc
-        }
+  /**
+   * The checker (reachable-linkage-core) and everything it needs, fetched on its own with Coursier, outside the project's resolution: sbt forces the
+   * project's Scala library onto every dependency it resolves (2.12 on an sbt 1 build), and the checker needs its own, Scala 2.13 and Scala 3.
+   */
+  private def resolveEngine(log: Logger): Seq[File] = {
+    val engine = coursierapi.Dependency.of("io.github.reachable-linkage", "reachable-linkage-core_3", engineVersion)
+    val jars =
+      try {
+        coursierapi.Fetch
+          .create()
+          .addDependencies(engine)
+          .withRepositories(coursierapi.Repository.ivy2Local(), coursierapi.Repository.central())
+          .fetch()
+          .asScala
+          .toList
+      } catch {
+        case e: coursierapi.error.CoursierError =>
+          throw new MessageOnlyException(s"Could not resolve the reachable-linkage engine $engine: ${e.getMessage}")
       }
-
-    // also need to load JDK classes from the bootstrap classpath
-    val bootstrapArtifacts = loadBootstrapArtifacts(bootClasspathToUse(log), log)
-
-    val allArtifacts = runtimeProjectArtifacts.map(_.artifact) ++ bootstrapArtifacts
-
-    val runtimeArtifactsAfterExclusions = runtimeProjectArtifacts
-      .filter(f => f.module.fold(true)(excluded))
-      .map(_.artifact)
-
-    val projectArtifact =
-      if (scanDependencies)
-        classesToArtifact(runtimeArtifactsAfterExclusions.flatMap(_.classes.asScala).toMap)
-      else
-        toArtifact(classDirectory)
-
-    if (projectArtifact.classes().isEmpty()) {
-      log.warn(
-        "No classes found in project build directory" +
-          " - did you run 'sbt compile' first?"
-      )
-    }
-
-    log.debug("Checking for conflicts starting from " + projectArtifact.name().name())
-    log.debug("Artifacts included in the project: ")
-    for (artifact <- runtimeArtifactsAfterExclusions) {
-      log.debug("    " + artifact.name().name())
-    }
-
-    val conflictChecker = new ConflictChecker
-
-    val conflicts =
-      conflictChecker.check(
-        projectArtifact,
-        runtimeArtifactsAfterExclusions.asJava,
-        allArtifacts.asJava
-      )
-
-    (conflicts.asScala.toSeq, sourceModules)
+    log.debug("reachable-linkage engine: " + jars.map(_.getName).mkString(", "))
+    jars
   }
 
-  private def toArtifact(outputDirectory: File): Artifact = {
-    val classes =
-      (outputDirectory ** "*.class")
-        .get()
-        .map(loadClass)
-        .map(c => c.className() -> c)
-        .toMap
+  /** A classpath entry: the name conflicts are attributed to, where it is, and the module sbt knows it as. */
+  private final case class SbtEntry(name: String, path: File, module: Option[ModuleID])
 
-    classesToArtifact(classes)
-  }
+  private def moduleName(m: ModuleID): String = s"${m.organization}:${m.name}:${m.revision}"
 
-  private def classesToArtifact(classes: Map[ClassTypeDescriptor, DeclaredClass]): Artifact = {
-    new ArtifactBuilder()
-      .name(new ArtifactName("project"))
-      .classes(classes.asJava)
-      .build()
-  }
-
-  private def loadClass(f: File): DeclaredClass = {
-    val is = new FileInputStream(f)
-    try com.spotify.missinglink.ClassLoader.load(is)
-    finally is.close()
-  }
-
-  private def loadBootstrapArtifacts(bootstrapClasspath: String, log: Logger)(implicit
+  /** The jars and class directories of the classpath, except the project's own class directory (it is passed on its own). */
+  private def classpathEntries(cp: Classpath, classDirectory: File)(implicit
       converter: FileConverter
-  ): List[Artifact] = {
-    if (bootstrapClasspath == null) {
-      Java9ModuleLoader.getJava9ModuleArtifacts((s, ex) => log.warn(s)).asScala.toList
-    } else {
-      val cp = bootstrapClasspath
-        .split(System.getProperty("path.separator"))
-        .map(f => Attributed.blank(PluginCompat.toFileRef(file(f))))
-        .toList
-
-      constructArtifacts(cp, log).map(_.artifact)
-    }
-  }
-
-  private def bootClasspathToUse(log: Logger): String = {
-    /*if (this.bootClasspath != null) {
-      log.debug("using configured boot classpath: " + this.bootClasspath);
-      this.bootClasspath;
-    } else {*/
-    val bootClasspath = System.getProperty("sun.boot.class.path")
-    log.debug("derived bootclasspath: " + bootClasspath)
-    bootClasspath
-    /*}*/
-  }
-
-  private def constructArtifacts(cp: Classpath, log: Logger)(implicit
-      converter: FileConverter
-  ): List[ModuleArtifact] = {
-    val artifactLoader = new ArtifactLoader
-
+  ): List[SbtEntry] = {
     def isValid(entry: File): Boolean =
       (entry.isFile() && entry.getPath().endsWith(".jar")) || entry.isDirectory()
 
-    def fileToArtifact(f: Attributed[PluginCompat.FileRef]): ModuleArtifact = {
-      log.debug("loading artifact for path: " + f)
-      ModuleArtifact(
-        artifactLoader.load(PluginCompat.toFile(f.data)),
-        f.get(PluginCompat.moduleIDStr).map(PluginCompat.parseModuleIDStrAttribute)
+    val projectDir = classDirectory.getCanonicalFile
+    cp.toList
+      .map(c => c -> PluginCompat.toFile(c.data))
+      .filter { case (_, f) => isValid(f) && f.getCanonicalFile != projectDir }
+      .map { case (c, f) =>
+        val module = c.get(PluginCompat.moduleIDStr).map(PluginCompat.parseModuleIDStrAttribute)
+        SbtEntry(module.fold(f.getPath)(moduleName), f, module)
+      }
+  }
+
+  private def hasClasses(classDirectory: File): Boolean =
+    (classDirectory ** "*.class").get().nonEmpty
+
+  private def stringList(values: Seq[String]): JList[String] = values.asJava
+
+  private def pairs(values: Seq[(String, String)]): JList[JList[String]] =
+    values.map { case (a, b) => Arrays.asList(a, b) }.asJava
+
+  /**
+   * Scanning the dependencies is sbt-missinglink's own mode: every class of every checked entry is a root and every
+   * conflict counts, as missinglink-core saw them. Otherwise the project's classes are the roots and the call graph
+   * says which conflicts they can reach.
+   */
+  private def engineRequest(
+      classDirectory: File,
+      entries: List[SbtEntry],
+      excluded: Set[String],
+      scanDependencies: Boolean,
+      ignoreSource: Seq[(String, Boolean)],
+      targetSource: Seq[(String, Boolean)],
+      ignoreDestination: Seq[(String, Boolean)],
+      targetDestination: Seq[(String, Boolean)]
+  ): JMap[String, AnyRef] = {
+    def packages(selectors: Seq[(String, Boolean)]): JList[JList[String]] =
+      pairs(selectors.map { case (name, subpackages) => (name, subpackages.toString) })
+
+    val request = new JHashMap[String, AnyRef]()
+    request.put("projectClasses", Collections.singletonList(classDirectory.getAbsolutePath))
+    request.put("classpath", pairs(entries.map(e => (e.name, e.path.getAbsolutePath))))
+    request.put("scope", if (scanDependencies) "Full" else "App")
+    request.put("precision", if (scanDependencies) "Class" else "Method")
+    request.put("excludedEntries", stringList(excluded.toList))
+    request.put("ignoreSourcePackages", packages(ignoreSource))
+    request.put("targetSourcePackages", packages(targetSource))
+    request.put("ignoreDestinationPackages", packages(ignoreDestination))
+    request.put("targetDestinationPackages", packages(targetDestination))
+    request
+  }
+
+  /** What each package filter that was set removed, as the plugin has always said it. */
+  private def logFilterEffects(result: EngineResult, log: Logger): Unit =
+    result.filtered.filter(_._2 != 0).foreach { case (kind, removed) =>
+      val (name, setting) = kind match {
+        case "IGNORE_SOURCE_PACKAGES"      => ("source", "missinglinkIgnoreSourcePackages")
+        case "TARGET_SOURCE_PACKAGES"      => ("source", "missinglinkTargetSourcePackages")
+        case "IGNORE_DESTINATION_PACKAGES" => ("destination", "missinglinkIgnoreDestinationPackages")
+        case _                             => ("destination", "missinglinkTargetDestinationPackages")
+      }
+      log.info(
+        s"""
+          |$removed conflicts found in ignored ${name} packages.
+          |Run plugin again without the '$setting' setting to see all conflicts that were found.
+           """.stripMargin
       )
     }
 
-    cp.filter(c => isValid(PluginCompat.toFile(c.data))).map(fileToArtifact).toList
-  }
+  /** `foo(java.lang.String, int)` from a method name and its descriptor. */
+  private def prettyMethod(name: String, descriptor: String): String =
+    s"$name(${parameterTypes(descriptor).mkString(", ")})"
 
-  private def filterConflicts[T <: PackageFilter](
-      packageFilters: Seq[T],
-      setting: SettingKey[?],
-      log: Logger,
-      name: String,
-      field: Dependency => ClassTypeDescriptor,
-  )(implicit pfs: PackageFilters[T]): Seq[Conflict] => Seq[Conflict] = { input =>
-    if (packageFilters.nonEmpty) {
-      log.debug(s"Applying filters on $name packages: ${packageFilters.mkString(", ")}")
+  private def parameterTypes(descriptor: String): List[String] = {
+    val end = descriptor.indexOf(')')
 
-      def isFiltered(conflict: Conflict): Boolean = {
-        val descriptor = field(conflict.dependency())
-        val className = descriptor.getClassName.replace('/', '.')
-        val conflictPackageName = className.substring(0, className.lastIndexOf('.'))
-
-        pfs.apply(conflictPackageName)(packageFilters)
-      }
-
-      val filtered = input.filter(isFiltered)
-      val diff = input.length - filtered.length
-
-      if (diff != 0) {
-        log.info(
-          s"""
-            |$diff conflicts found in ignored ${name} packages.
-            |Run plugin again without the '${setting.key.label}' setting to see all conflicts that were found.
-             """.stripMargin
-        )
-      }
-
-      filtered
-    } else {
-      input
+    def primitive(c: Char): String = c match {
+      case 'B'   => "byte"
+      case 'C'   => "char"
+      case 'D'   => "double"
+      case 'F'   => "float"
+      case 'I'   => "int"
+      case 'J'   => "long"
+      case 'S'   => "short"
+      case 'Z'   => "boolean"
+      case other => other.toString
     }
+
+    @scala.annotation.tailrec
+    def from(i: Int, acc: List[String]): List[String] =
+      if (i >= end) acc.reverse
+      else {
+        val dimensions = descriptor.drop(i).takeWhile(_ == '[').length
+        val start = i + dimensions
+        val (base, next) = descriptor.charAt(start) match {
+          case 'L' =>
+            val semicolon = descriptor.indexOf(';', start)
+            (descriptor.substring(start + 1, semicolon).replace('/', '.'), semicolon + 1)
+          case c => (primitive(c), start + 1)
+        }
+        from(next, (base + ("[]" * dimensions)) :: acc)
+      }
+
+    if (end < 0) Nil else from(1, Nil)
   }
+
+  private val UnknownEntry = "<unknown>"
 
   private def outputConflicts(
-      conflicts: Seq[Conflict],
-      sourceModules: Map[ClassTypeDescriptor, ModuleID],
+      conflicts: Seq[EngineConflict],
+      modules: Map[String, ModuleID],
       verbose: Boolean,
       log: Logger
   ): Unit = {
@@ -382,12 +357,12 @@ object MissingLinkPlugin extends AutoPlugin {
     def referenceVerb(count: Int): String = if (count == 1) "references" else "reference"
 
     val descriptions = Map(
-      ConflictCategory.CLASS_NOT_FOUND -> "Class being called not found",
-      ConflictCategory.METHOD_SIGNATURE_NOT_FOUND -> "Method being called not found",
+      "CLASS_NOT_FOUND" -> "Class being called not found",
+      "METHOD_SIGNATURE_NOT_FOUND" -> "Method being called not found",
     )
 
-    def categoryDesc(category: ConflictCategory): String =
-      descriptions.getOrElse(category, category.name().replace('_', ' '))
+    def categoryDesc(category: String): String =
+      descriptions.getOrElse(category, category.replace('_', ' '))
 
     def optionalLineNumber(lineNumber: Int): String =
       if (lineNumber != 0) ":" + lineNumber else ""
@@ -395,11 +370,11 @@ object MissingLinkPlugin extends AutoPlugin {
     // Attribute every conflict to the JAR that references the missing symbol
     val byModule: Seq[((String, String), (Int, Int))] =
       conflicts
-        .flatMap(c => sourceModules.get(c.dependency().fromClass()).map(_ -> c.category()))
+        .flatMap(c => modules.get(c.usedBy).map(_ -> c.category))
         .groupBy { case (module, _) => (module.organization, module.name) }
         .map { case (key, grouped) =>
-          val missingClasses = grouped.count(_._2 == ConflictCategory.CLASS_NOT_FOUND)
-          key -> (missingClasses, grouped.size - missingClasses)
+          val missingClasses = grouped.count(_._2 == "CLASS_NOT_FOUND")
+          key -> ((missingClasses, grouped.size - missingClasses))
         }
         .toSeq
         .sortBy { case ((org, name), (classes, members)) => (-classes, -members, org, name) }
@@ -412,38 +387,37 @@ object MissingLinkPlugin extends AutoPlugin {
     )
 
     if (verbose) {
-      for ((category, conflictsInCategory) <- conflicts.groupBy(_.category())) {
+      for ((category, conflictsInCategory) <- conflicts.groupBy(_.category)) {
         logLine("")
         logLine("Category: " + categoryDesc(category))
 
         // next group by artifact containing the conflict
-        val byArtifact = conflictsInCategory.groupBy(_.usedBy())
+        val byArtifact = conflictsInCategory.groupBy(_.usedBy)
 
         for ((artifactName, conflictsInArtifact) <- byArtifact) {
-          logLine("  In artifact: " + artifactName.name())
+          logLine("  In artifact: " + artifactName)
 
           // next group by class containing the conflict
-          val byClassName = conflictsInArtifact.groupBy(_.dependency().fromClass())
+          val byClassName = conflictsInArtifact.groupBy(_.fromClass)
 
-          for ((classDesc, conflictsInClass) <- byClassName) {
-            logLine("    In class: " + classDesc.toString())
+          for ((className, conflictsInClass) <- byClassName) {
+            logLine("    In class: " + className)
 
             // collapse all call sites that share the same missing target + reason
             val byProblem = conflictsInClass.groupBy { conflict =>
-              (conflict.dependency().describe(), conflict.reason(), conflict.existsIn())
+              (conflict.describe, conflict.reason, conflict.existsIn)
             }
 
             for (((describe, reason, existsIn), groupedConflicts) <- byProblem) {
               logLine("      " + describe)
               logLine("      Problem: " + reason)
-              if (existsIn != ConflictChecker.UNKNOWN_ARTIFACT_NAME)
-                logLine("      Found in: " + existsIn.name())
+              if (existsIn != UnknownEntry)
+                logLine("      Found in: " + existsIn)
 
               val callSites = groupedConflicts
                 .map { conflict =>
-                  val dep = conflict.dependency()
-                  dep.fromMethod().prettyWithoutReturnType() +
-                    optionalLineNumber(dep.fromLineNumber())
+                  prettyMethod(conflict.fromMethodName, conflict.fromMethodDescriptor) +
+                    optionalLineNumber(conflict.fromLineNumber)
                 }
                 .distinct
                 .sorted
@@ -457,8 +431,9 @@ object MissingLinkPlugin extends AutoPlugin {
         }
       }
     } else {
-      val (classNotFound, signatureNotFound) =
-        conflicts.partition(_.category() == ConflictCategory.CLASS_NOT_FOUND)
+      val classNotFound = conflicts.filter(_.category == "CLASS_NOT_FOUND")
+      val memberNotFound = conflicts.filter(c => c.category == "METHOD_SIGNATURE_NOT_FOUND" || c.category == "FIELD_NOT_FOUND")
+      val other = conflicts.filterNot(c => classNotFound.contains(c) || memberNotFound.contains(c))
 
       def classCount(n: Int): String = s"$n missing ${if (n == 1) "class" else "classes"}"
       def memberCount(n: Int): String = s"$n missing ${if (n == 1) "member" else "members"}"
@@ -468,10 +443,15 @@ object MissingLinkPlugin extends AutoPlugin {
           s" * ${classNotFound.size} ${conflictNoun(classNotFound.size)} " +
             s"${referenceVerb(classNotFound.size)} classes missing from the classpath"
         )
-      if (signatureNotFound.nonEmpty)
+      if (memberNotFound.nonEmpty)
         logLine(
-          s" * ${signatureNotFound.size} ${conflictNoun(signatureNotFound.size)} " +
-            s"${referenceVerb(signatureNotFound.size)} members missing from classes already on your classpath"
+          s" * ${memberNotFound.size} ${conflictNoun(memberNotFound.size)} " +
+            s"${referenceVerb(memberNotFound.size)} members missing from classes already on your classpath"
+        )
+      if (other.nonEmpty)
+        logLine(
+          s" * ${other.size} ${conflictNoun(other.size)} of other kinds " +
+            other.map(c => categoryDesc(c.category)).distinct.sorted.mkString("(", ", ", ")")
         )
 
       if (byModule.nonEmpty) {
@@ -488,7 +468,7 @@ object MissingLinkPlugin extends AutoPlugin {
       }
 
       val projectLocal =
-        conflicts.count(c => !sourceModules.contains(c.dependency().fromClass()))
+        conflicts.count(c => !modules.contains(c.usedBy))
       if (projectLocal != 0) {
         val verb = if (projectLocal == 1) "originates" else "originate"
         logLine(
@@ -504,7 +484,81 @@ object MissingLinkPlugin extends AutoPlugin {
     }
   }
 
-  private final case class ModuleArtifact(artifact: Artifact, module: Option[ModuleID])
+  /** One conflict as the checker reports it over the bridge. */
+  private final case class EngineConflict(
+      category: String,
+      label: String,
+      usedBy: String,
+      existsIn: String,
+      reason: String,
+      describe: String,
+      fromClass: String,
+      fromMethodName: String,
+      fromMethodDescriptor: String,
+      fromLineNumber: Int,
+      failing: Boolean,
+      reportedByMissinglink: Boolean
+  )
+
+  private final case class EngineResult(
+      warnings: Seq[String],
+      filtered: Seq[(String, Int)],
+      conflicts: Seq[EngineConflict]
+  )
+
+  /**
+   * Calls the checker through its one static bridge method, which takes and returns only `java.util` maps, lists and strings. The checker is in a
+   * classloader of its own (its parent is the JDK's, not sbt's), so its Scala 3 and 2.13 libraries cannot meet this plugin's.
+   */
+  private object EngineBridge {
+    private val BridgeClass = "reachablelinkage.api.LinkageBridge"
+
+    def check(engineJars: Seq[File], request: JMap[String, AnyRef]): EngineResult = {
+      if (engineJars.isEmpty)
+        throw new MessageOnlyException("The reachable-linkage engine could not be resolved (is it published, and is the resolver set up?)")
+      val loader = new URLClassLoader(engineJars.map(_.toURI.toURL).toArray, ClassLoader.getSystemClassLoader.getParent)
+      try {
+        val response = loader.loadClass(BridgeClass).getMethod("check", classOf[JMap[AnyRef, AnyRef]]).invoke(null, request).asInstanceOf[JMap[String, AnyRef]]
+        decode(response)
+      } catch {
+        case e: java.lang.reflect.InvocationTargetException =>
+          throw new MessageOnlyException(s"The reachable-linkage engine failed: ${e.getCause}")
+      } finally loader.close()
+    }
+
+    private def decode(response: JMap[String, AnyRef]): EngineResult = {
+      Option(response.get("error")).foreach(message => throw new MessageOnlyException(s"reachable-linkage: $message"))
+
+      def list(key: String): Seq[AnyRef] = response.get(key).asInstanceOf[JList[AnyRef]].asScala.toList
+      def text(m: JMap[String, AnyRef], key: String): String = String.valueOf(m.get(key))
+      def flag(m: JMap[String, AnyRef], key: String): Boolean = m.get(key).asInstanceOf[java.lang.Boolean].booleanValue
+
+      EngineResult(
+        warnings = list("warnings").map(_.toString),
+        filtered = list("filtered").map { pair =>
+          val p = pair.asInstanceOf[JList[String]]
+          (p.get(0), p.get(1).toInt)
+        },
+        conflicts = list("conflicts").map { entry =>
+          val m = entry.asInstanceOf[JMap[String, AnyRef]]
+          EngineConflict(
+            category = text(m, "category"),
+            label = text(m, "label"),
+            usedBy = text(m, "usedBy"),
+            existsIn = text(m, "existsIn"),
+            reason = text(m, "reason"),
+            describe = text(m, "describe"),
+            fromClass = text(m, "fromClass"),
+            fromMethodName = text(m, "fromMethodName"),
+            fromMethodDescriptor = text(m, "fromMethodDescriptor"),
+            fromLineNumber = m.get("fromLineNumber").asInstanceOf[java.lang.Integer].intValue,
+            failing = flag(m, "failing"),
+            reportedByMissinglink = flag(m, "reportedByMissinglink")
+          )
+        }
+      )
+    }
+  }
 
   private[sbtmissinglink] sealed trait PackageFilter {
     def apply(name: String): Boolean
