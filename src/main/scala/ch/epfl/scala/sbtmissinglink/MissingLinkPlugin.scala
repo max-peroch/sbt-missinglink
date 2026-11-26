@@ -231,13 +231,13 @@ object MissingLinkPlugin extends AutoPlugin {
 
     val conflictNoun = if (filteredTotal == 1) "conflict" else "conflicts"
     val total = s"$filteredTotal $conflictNoun found!$diffMessage"
-    log.info(total)
+    log.error(total)
 
     val unreachable = if (layout == ConflictSummary.Layout.Classic) Nil else others
     ConflictSummary.lines(shown, unreachable, modules, settings.verbose, layout, evictionData).foreach(line => log.error(line))
     // The verbose breakdown can run long: the total and what kinds it is are said again where the output ends.
     if (settings.verbose) {
-      log.info(total)
+      log.error(total)
       ConflictSummary.kindLines(shown).foreach(line => log.error(line))
     }
 

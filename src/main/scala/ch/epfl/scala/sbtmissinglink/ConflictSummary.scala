@@ -185,15 +185,15 @@ private[sbtmissinglink] object ConflictSummary {
         s"Missinglink summary: conflicts found in ${perModule.size} " +
           s"${if (perModule.size == 1) "dependency" else "dependencies"}."
 
-    header +: (if (verbose) verboseLines(conflicts, Layout.Classic) else classicBrief(conflicts, perModule, modules, evictions))
+    header +: (if (verbose) verboseLines(conflicts, Layout.Classic) ++ evictionNote(conflicts, modules, evictions) else classicBrief(conflicts, perModule, modules))
   }
 
-  private def classicBrief(conflicts: List[EngineConflict], perModule: List[((String, String), Counts)], modules: Map[String, ModuleID], evictions: List[Eviction]): List[String] = {
+  private def classicBrief(conflicts: List[EngineConflict], perModule: List[((String, String), Counts)], modules: Map[String, ModuleID]): List[String] = {
     val exclusions =
       if (perModule.isEmpty) Nil
       else "Exclude the dependencies that reference them:" +: exclusionSnippet(perModule, (_, counts) => classicComment(counts))
 
-    kindLines(conflicts) ++ exclusions ++ projectLocalNote(conflicts, modules) ++ evictionNote(conflicts, modules, evictions) :+ verbosePointer
+    kindLines(conflicts) ++ exclusions ++ projectLocalNote(conflicts, modules) :+ verbosePointer
   }
 
   private def projectLocalNote(conflicts: List[EngineConflict], modules: Map[String, ModuleID]): List[String] = {
@@ -219,7 +219,7 @@ private[sbtmissinglink] object ConflictSummary {
         (if (others.nonEmpty) s", ${others.size} more that nothing it calls reaches." else ".")
 
     val detail = if (verbose) verboseLines(shown, Layout.Labelled) else if (shown.nonEmpty) reachableSection(shown, modules) else Nil
-    List(header) ++ detail ++ unreachableSection(shown, others, modules) ++ evictionNote(shown ++ others, modules, evictions) ++ List(verbosePointer)
+    List(header) ++ detail ++ unreachableSection(shown, others, modules) ++ (if (verbose) evictionNote(shown ++ others, modules, evictions) else List(verbosePointer))
   }
 
   /** What the project can hit: what is broken, in which dependencies, and what to do about it. */

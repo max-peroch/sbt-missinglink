@@ -95,22 +95,29 @@ class ConflictSummarySuite extends munit.FunSuite {
 
   private val nettyEviction = Eviction("io.netty", "netty-common", "4.1", List(EvictedVersion("4.0", List("a:one", "b:two", "c:three", "d:four"))))
 
-  test("a version that resolution replaced is named when a conflict involves that module, in both layouts") {
+  test("with the verbose output, a version that resolution replaced is named when a conflict involves that module, in both layouts") {
     for (layout <- List(Layout.Classic, Layout.Labelled)) {
-      val lines = ConflictSummary.lines(List(reachable), Nil, modules, verbose = false, layout = layout, evictions = List(nettyEviction))
+      val lines = ConflictSummary.lines(List(reachable), Nil, modules, verbose = true, layout = layout, evictions = List(nettyEviction))
       assert(lines.exists(_.startsWith("Versions that dependency resolution replaced")), s"$layout: $lines")
       assert(lines.contains("  - io.netty:netty-common: 4.0 (wanted by a:one, b:two, c:three, ...) replaced by 4.1"), s"$layout: $lines")
     }
   }
 
+  test("the brief output leaves the replaced versions to the verbose one, in both layouts") {
+    for (layout <- List(Layout.Classic, Layout.Labelled)) {
+      val lines = ConflictSummary.lines(List(reachable), Nil, modules, verbose = false, layout = layout, evictions = List(nettyEviction))
+      assert(!lines.exists(_.contains("replaced")), s"$layout: $lines")
+    }
+  }
+
   test("a replaced version of a module no conflict involves is not mentioned") {
     val unrelated = Eviction("org.other", "lib", "2", List(EvictedVersion("1", List("x:y"))))
-    val lines = ConflictSummary.lines(List(reachable), List(unrelated).map(_ => unreachable), modules, verbose = false, layout = Layout.Labelled, evictions = List(unrelated))
+    val lines = ConflictSummary.lines(List(reachable), List(unrelated).map(_ => unreachable), modules, verbose = true, layout = Layout.Labelled, evictions = List(unrelated))
     assert(!lines.exists(_.contains("replaced")), lines.toString)
   }
 
   test("a module that holds only unreachable conflicts still gets the note") {
-    val lines = ConflictSummary.lines(List(reachable), List(unreachable), modules, verbose = false, layout = Layout.Labelled, evictions = List(Eviction("org.slf4j", "jcl-over-slf4j", "2.0", List(EvictedVersion("1.7", List("a:one"))))))
+    val lines = ConflictSummary.lines(List(reachable), List(unreachable), modules, verbose = true, layout = Layout.Labelled, evictions = List(Eviction("org.slf4j", "jcl-over-slf4j", "2.0", List(EvictedVersion("1.7", List("a:one"))))))
     assert(lines.contains("  - org.slf4j:jcl-over-slf4j: 1.7 (wanted by a:one) replaced by 2.0"), lines.toString)
   }
 
