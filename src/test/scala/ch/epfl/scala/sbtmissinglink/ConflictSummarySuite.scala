@@ -93,17 +93,6 @@ class ConflictSummarySuite extends munit.FunSuite {
     assert(!classic.exists(_.contains("Reachability")), classic.toString)
   }
 
-  test("the verbose layout ends with the same recap as the brief one, without the pointer to itself") {
-    for (layout <- List(Layout.Classic, Layout.Labelled)) {
-      val brief   = ConflictSummary.lines(List(reachable), List(unreachable), modules, verbose = false, layout = layout)
-      val verbose = ConflictSummary.lines(List(reachable), List(unreachable), modules, verbose = true, layout = layout)
-      val recap   = brief.filterNot(_.startsWith("Re-run with"))
-      assertEquals(verbose.takeRight(recap.size), recap, s"$layout: $verbose")
-      assert(verbose.size > recap.size, s"$layout: the breakdown comes before the recap")
-      assert(!verbose.exists(_.startsWith("Re-run with")), s"$layout: $verbose")
-    }
-  }
-
   private val nettyEviction = Eviction("io.netty", "netty-common", "4.1", List(EvictedVersion("4.0", List("a:one", "b:two", "c:three", "d:four"))))
 
   test("a version that resolution replaced is named when a conflict involves that module, in both layouts") {

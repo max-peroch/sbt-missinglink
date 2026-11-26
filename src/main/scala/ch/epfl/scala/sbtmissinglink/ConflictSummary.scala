@@ -139,14 +139,11 @@ private[sbtmissinglink] object ConflictSummary {
       verbose: Boolean,
       layout: Layout,
       evictions: List[Eviction] = Nil
-  ): List[String] = {
-    val recap = layout match {
-      case Layout.Labelled => labelledLines(shown, others, modules, evictions)
-      case Layout.Classic  => classicLines(shown, modules, evictions)
+  ): List[String] =
+    layout match {
+      case Layout.Labelled => labelledLines(shown, others, modules, verbose, evictions)
+      case Layout.Classic  => classicLines(shown, modules, verbose, evictions)
     }
-    // The full breakdown can be long: the recap follows it, so the last lines of the output say what it comes to.
-    if (verbose) verboseLines(shown, layout) ++ recap.filterNot(_ == verbosePointer) else recap
-  }
 
   private val RequestersShown = 3
 
@@ -168,7 +165,7 @@ private[sbtmissinglink] object ConflictSummary {
 
   // ---- sbt-missinglink's own layout ----
 
-  private def classicLines(conflicts: List[EngineConflict], modules: Map[String, ModuleID], evictions: List[Eviction]): List[String] = {
+  private def classicLines(conflicts: List[EngineConflict], modules: Map[String, ModuleID], verbose: Boolean, evictions: List[Eviction]): List[String] = {
     val perModule = byModule(conflicts, modules)
     val header =
       if (perModule.isEmpty) "Missinglink summary: conflicts found."
@@ -176,7 +173,7 @@ private[sbtmissinglink] object ConflictSummary {
         s"Missinglink summary: conflicts found in ${perModule.size} " +
           s"${if (perModule.size == 1) "dependency" else "dependencies"}."
 
-    header +: classicBrief(conflicts, perModule, modules, evictions)
+    header +: (if (verbose) verboseLines(conflicts, Layout.Classic) else classicBrief(conflicts, perModule, modules, evictions))
   }
 
   private def classicBrief(conflicts: List[EngineConflict], perModule: List[((String, String), Counts)], modules: Map[String, ModuleID], evictions: List[Eviction]): List[String] = {
@@ -218,13 +215,14 @@ private[sbtmissinglink] object ConflictSummary {
       shown: List[EngineConflict],
       others: List[EngineConflict],
       modules: Map[String, ModuleID],
+      verbose: Boolean,
       evictions: List[Eviction]
   ): List[String] = {
     val header =
       s"Missinglink summary: ${shown.size} ${noun(shown.size)} your code can reach" +
         (if (others.nonEmpty) s", ${others.size} more that nothing it calls reaches." else ".")
 
-    val detail = if (shown.nonEmpty) reachableSection(shown, modules) else Nil
+    val detail = if (verbose) verboseLines(shown, Layout.Labelled) else if (shown.nonEmpty) reachableSection(shown, modules) else Nil
     List(header) ++ detail ++ unreachableSection(shown, others, modules) ++ evictionNote(shown ++ others, modules, evictions) ++ List(verbosePointer)
   }
 
