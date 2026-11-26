@@ -2,7 +2,7 @@ package ch.epfl.scala.sbtmissinglink
 
 import sbt._
 import sbt.Keys._
-import sbt.librarymanagement.ModuleFilter
+import sbt.librarymanagement.{ModuleDescriptorConfiguration, ModuleFilter}
 import sbt.plugins.JvmPlugin
 
 import sbtcompat.PluginCompat
@@ -116,13 +116,15 @@ object MissingLinkPlugin extends AutoPlugin {
   // Make it easy to throttle the concurrency of running missing-link on multiple projects, it consumes a lot of memory
   val missinglinkConflictsTag = Tags.Tag("missinglinkConflicts")
 
-  // sbt's `evicted` prints what it finds whenever it runs, and the report names replaced versions only in the verbose output: so it runs only then.
-  private val missinglinkEvictions = taskKey[List[Eviction]]("What dependency resolution replaced, for the verbose report.")
+  // What sbt's `evicted` works out, without its printing: the report names the replaced versions itself.
+  @transient
+  private val missinglinkEvictions = taskKey[List[Eviction]]("What dependency resolution replaced.")
 
   val configSettings: Seq[Setting[?]] = Def.settings(
-    missinglinkEvictions := Def.taskDyn {
-      if (missinglinkVerbose.value) Def.task(evictions(evicted.value)) else Def.task(List.empty[Eviction])
-    }.value,
+    missinglinkEvictions := {
+      val module = dependencyResolution.value.moduleDescriptor(moduleSettings.value.asInstanceOf[ModuleDescriptorConfiguration])
+      evictions(EvictionWarning(module, (evicted / evictionWarningOptions).value, update.value))
+    },
     missinglinkCheck := Def
       .task {
         val log = streams.value.log
@@ -213,7 +215,7 @@ object MissingLinkPlugin extends AutoPlugin {
     val considered = if (layout == ConflictSummary.Layout.Classic) result.conflicts.filter(_.reportedByMissinglink) else result.conflicts
     val (shown, others) = considered.partition(fails(_, settings.scanDependencies))
     if (shown.nonEmpty) reportFailing(shown, others, result, settings, layout, modules, evictionData, log)
-    else reportPassing(others, layout, log)
+    else reportPassing(others, layout, settings.verbose, log)
   }
 
   private def reportFailing(
@@ -253,9 +255,9 @@ object MissingLinkPlugin extends AutoPlugin {
     }
   }
 
-  private def reportPassing(others: List[EngineConflict], layout: ConflictSummary.Layout, log: Logger): Unit = {
+  private def reportPassing(others: List[EngineConflict], layout: ConflictSummary.Layout, verbose: Boolean, log: Logger): Unit = {
     log.info("No conflicts found")
-    if (layout == ConflictSummary.Layout.Labelled && others.nonEmpty) {
+    if (verbose && layout == ConflictSummary.Layout.Labelled && others.nonEmpty) {
       log.info(
         s"${others.size} ${if (others.size == 1) "conflict is" else "conflicts are"} not reachable from your code " +
           "(never called, caught, or checked for first) and do not fail the build."
