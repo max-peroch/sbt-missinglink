@@ -67,4 +67,17 @@ class OptionalDependenciesSuite extends munit.FunSuite {
     assertEquals(leftOut, 2)
     assertEquals(result.conflicts.map(c => (c.usedBy, c.fromClass)), List(("lib", "lib.Other"), ("app", "app.Main")))
   }
+
+  test("nothing is left out when the optional dependency is on the classpath: a class of it that is missing is a real break") {
+    val dir = java.nio.file.Files.createTempDirectory("optional-present")
+    val jar = dir.resolve("lib-1.0.jar")
+    java.nio.file.Files.write(jar, Array.emptyByteArray)
+    java.nio.file.Files.write(dir.resolve("lib-1.0.pom"), pom(dependency("com.jolbox", "bonecp", "<scope>provided</scope>")).getBytes("UTF-8"))
+    val conflicts = List(conflict("com.acme:lib:1.0", "lib.Pool", "com.jolbox.bonecp.Removed"))
+    val absent = OptionalDependencies.without(EngineResult(Nil, Nil, conflicts), Map("com.acme:lib:1.0" -> jar.toFile))
+    assertEquals(absent._2, 1)
+    val present = OptionalDependencies.without(EngineResult(Nil, Nil, conflicts), Map("com.acme:lib:1.0" -> jar.toFile, "com.jolbox:bonecp_2.13:0.8" -> new java.io.File("bonecp.jar")))
+    assertEquals(present._2, 0)
+    assertEquals(present._1.conflicts.size, 1)
+  }
 }

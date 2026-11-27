@@ -67,11 +67,15 @@ private[sbtmissinglink] object OptionalDependencies {
 
   /**
    * The result without the missing classes that a library declares optional: a conflict where a dependency `usedBy` (by entry name, with its jar in
-   * `jars`) refers to a class of one of its own `provided` or `optional` dependencies. A class that does so is part of that optional feature, so what
-   * else it refers to that is missing (the optional dependency's own dependencies, which the POM does not list) is left out with it. Also how many.
+   * `jars`) refers to a class of one of its own `provided` or `optional` dependencies, which is not on the classpath. One that is on the classpath has
+   * a class missing for a real reason (another version), so it stays. A class that refers to an optional dependency is part of that optional feature,
+   * so what else it refers to that is missing (the optional dependency's own dependencies, which the POM does not list) is left out with it. Also how
+   * many.
    */
   def without(result: EngineResult, jars: Map[String, File]): (EngineResult, Int) = {
-    val declared = jars.map { case (name, jar) => name -> declaredBy(jar) }
+    val onClasspath = jars.keys.map(_.split(':').toList).collect { case org :: name :: _ => (org, name) }.toSet
+    def present(d: OptionalDependency): Boolean = onClasspath.exists { case (org, name) => org == d.groupId && (name == d.artifactId || name.startsWith(d.artifactId + "_")) }
+    val declared = jars.map { case (name, jar) => name -> declaredBy(jar).filterNot(present) }
     def optional(c: EngineConflict): Boolean =
       c.isMissingClass && declared.getOrElse(c.usedBy, Nil).exists(_.holds(c.targetClass))
     val optionalClasses = result.conflicts.filter(optional).map(c => (c.usedBy, c.fromClass)).toSet
