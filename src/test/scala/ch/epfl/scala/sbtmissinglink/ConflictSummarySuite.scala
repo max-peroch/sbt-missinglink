@@ -77,6 +77,17 @@ class ConflictSummarySuite extends munit.FunSuite {
     assert(!classic.exists(_.contains("Reachability")), classic.toString)
   }
 
+  test("the verbose output says how the application reaches a conflict, by its shortest route; the brief output does not") {
+    val long  = reachable.copy(route = List("app.Main.run", "lib.B.mid", "lib.A.go"))
+    val short = reachable.copy(route = List("app.Main.run", "lib.A.go"))
+    val verbose = ConflictSummary.lines(List(long, short), modules, verbose = true, layout = Layout.Labelled)
+    val at      = verbose.indexOf("      Reached through:")
+    assert(at >= 0, verbose.toString)
+    assertEquals(verbose.slice(at, at + 3), List("      Reached through:", "        app.Main.run", "        lib.A.go"))
+    val brief = ConflictSummary.lines(List(long), modules, verbose = false, layout = Layout.Labelled)
+    assert(!brief.exists(_.contains("Reached through")), brief.toString)
+  }
+
   private val nettyEviction = Eviction("io.netty", "netty-common", "4.1", List(EvictedVersion("4.0", List("a:one", "b:two", "c:three", "d:four"))))
 
   test("a version that resolution replaced is named when a conflict involves that module, in both layouts") {

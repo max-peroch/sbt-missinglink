@@ -51,7 +51,8 @@ private[sbtmissinglink] object EngineBridge {
       fromLineNumber = number(m, "fromLineNumber"),
       failing = flag(m, "failing"),
       reportedByMissinglink = flag(m, "reportedByMissinglink"),
-      targetClass = text(m, "targetClass")
+      targetClass = text(m, "targetClass"),
+      route = list(m, "route").map(_.toString)
     )
 
   // The engine's response is a contract between two versions of our own code; a field that is missing or of the wrong type is said, not hidden.

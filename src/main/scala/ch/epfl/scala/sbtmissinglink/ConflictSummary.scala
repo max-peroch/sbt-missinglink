@@ -110,6 +110,10 @@ private[sbtmissinglink] object ConflictSummary {
       "(which class references each missing symbol, and from which methods)."
 
   /** The full per-class breakdown of `conflicts`: who references what, from which methods. */
+  /** How the application reaches the conflicts that fail: the shortest of their routes, the methods from the application to the one holding the reference. */
+  private def routeLines(conflicts: List[EngineConflict]): List[String] =
+    conflicts.map(_.route).filter(_.nonEmpty).sortBy(_.size).headOption.fold(List.empty[String])(route => "      Reached through:" +: route.map("        " + _))
+
   private def verboseLines(conflicts: List[EngineConflict], layout: Layout): List[String] =
     conflicts.groupBy(_.category).toList.sortBy(_._1.name).flatMap { case (category, inCategory) =>
       List("", "Category: " + categoryDesc(category)) ++
@@ -122,6 +126,7 @@ private[sbtmissinglink] object ConflictSummary {
                   (if (existsIn != UnknownEntry) List("      Found in: " + existsIn) else Nil) ++
                   List("      Referenced from:") ++
                   sameProblem.map(callSite).distinct.sorted.map("        " + _) ++
+                  routeLines(sameProblem) ++
                   List("      --------")
             }
           }

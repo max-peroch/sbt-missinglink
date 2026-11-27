@@ -164,7 +164,8 @@ object MissingLinkPlugin extends AutoPlugin {
             scanDependencies = scanDependencies,
             precision = precision,
             keepRulesFile = missinglinkKeepRulesFile.value,
-            cacheDirectory = missinglinkCacheDirectory.value
+            cacheDirectory = missinglinkCacheDirectory.value,
+            routes = missinglinkVerbose.value
           ),
           missinglinkIgnoreSourcePackages.value.map(p => (p.name, p.ignoreSubpackages)),
           missinglinkTargetSourcePackages.value.map(p => (p.name, p.targetSubpackages)),
@@ -326,7 +327,8 @@ object MissingLinkPlugin extends AutoPlugin {
       scanDependencies: Boolean,
       precision: MissinglinkPrecision,
       keepRulesFile: Option[File],
-      cacheDirectory: Option[File]
+      cacheDirectory: Option[File],
+      routes: Boolean
   )
 
   private def stringList(values: Seq[String]): JList[String] = values.asJava
@@ -359,6 +361,8 @@ object MissingLinkPlugin extends AutoPlugin {
     request.put("targetDestinationPackages", packages(targetDestination))
     settings.keepRulesFile.foreach(f => request.put("keepRulesFile", f.getAbsolutePath))
     settings.cacheDirectory.foreach(f => request.put("cacheDirectory", f.getAbsolutePath))
+    // The route to a conflict is only printed in the verbose report.
+    request.put("routes", java.lang.Boolean.valueOf(settings.routes))
     request
   }
 
