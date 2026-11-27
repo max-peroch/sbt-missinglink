@@ -30,7 +30,8 @@ private[sbtmissinglink] final case class EngineConflict(
     fromMethodDescriptor: String,
     fromLineNumber: Int,
     failing: Boolean,
-    reportedByMissinglink: Boolean
+    reportedByMissinglink: Boolean,
+    targetClass: String = ""
 ) {
   def isMissingClass: Boolean = category == Category.ClassNotFound
 

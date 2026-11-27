@@ -171,12 +171,12 @@ object MissingLinkPlugin extends AutoPlugin {
           missinglinkIgnoreDestinationPackages.value.map(p => (p.name, p.ignoreSubpackages)),
           missinglinkTargetDestinationPackages.value.map(p => (p.name, p.targetSubpackages))
         )
-        val result = EngineBridge.check(request)
+        val (result, leftOut) = OptionalDependencies.without(EngineBridge.check(request), entries.collect { case SbtEntry(name, path, Some(_)) => name -> path }.toMap)
         result.warnings.foreach(w => log.warn(w))
         logFilterEffects(result, log)
         reportConflicts(
           result,
-          ReportSettings(precision, scanDependencies, verbose = missinglinkVerbose.value, failOnConflicts = missinglinkFailOnConflicts.value),
+          ReportSettings(precision, scanDependencies, verbose = missinglinkVerbose.value, failOnConflicts = missinglinkFailOnConflicts.value, optionalLeftOut = leftOut),
           modules,
           evictionData,
           log
@@ -204,7 +204,7 @@ object MissingLinkPlugin extends AutoPlugin {
   }
 
   /** What the report depends on besides the conflicts. */
-  private final case class ReportSettings(precision: MissinglinkPrecision, scanDependencies: Boolean, verbose: Boolean, failOnConflicts: Boolean)
+  private final case class ReportSettings(precision: MissinglinkPrecision, scanDependencies: Boolean, verbose: Boolean, failOnConflicts: Boolean, optionalLeftOut: Int)
 
   /**
    * Prints what the check found and fails the build if it must. At class precision the report is sbt-missinglink's own: every conflict, and only the
@@ -215,8 +215,14 @@ object MissingLinkPlugin extends AutoPlugin {
     val considered = if (layout == ConflictSummary.Layout.Classic) result.conflicts.filter(_.reportedByMissinglink) else result.conflicts
     val shown = considered.filter(fails(_, settings.scanDependencies))
     if (shown.nonEmpty) reportFailing(shown, result, settings, layout, modules, evictionData, log)
-    else log.info("No conflicts found")
+    else {
+      log.info("No conflicts found")
+      if (settings.verbose && settings.optionalLeftOut > 0) log.info(optionalNote(settings.optionalLeftOut))
+    }
   }
+
+  private def optionalNote(count: Int): String =
+    s"$count ${if (count == 1) "conflict is" else "conflicts are"} on classes that the dependency referring to them declares provided or optional: left out."
 
   private def reportFailing(
       shown: List[EngineConflict],
@@ -242,6 +248,7 @@ object MissingLinkPlugin extends AutoPlugin {
 
     ConflictSummary.lines(shown, modules, settings.verbose, layout, evictionData).foreach(line => log.error(line))
     // The verbose breakdown can run long: the total and what kinds it is are said again where the output ends.
+    if (settings.verbose && settings.optionalLeftOut > 0) log.error(optionalNote(settings.optionalLeftOut))
     if (settings.verbose) {
       log.error(total)
       ConflictSummary.kindLines(shown).foreach(line => log.error(line))

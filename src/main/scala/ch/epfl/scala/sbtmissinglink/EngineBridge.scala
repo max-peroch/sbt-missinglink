@@ -50,7 +50,8 @@ private[sbtmissinglink] object EngineBridge {
       fromMethodDescriptor = text(m, "fromMethodDescriptor"),
       fromLineNumber = number(m, "fromLineNumber"),
       failing = flag(m, "failing"),
-      reportedByMissinglink = flag(m, "reportedByMissinglink")
+      reportedByMissinglink = flag(m, "reportedByMissinglink"),
+      targetClass = text(m, "targetClass")
     )
 
   // The engine's response is a contract between two versions of our own code; a field that is missing or of the wrong type is said, not hidden.
